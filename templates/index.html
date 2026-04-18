@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>IoT Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 30px;
+      background: #f4f6fa;
+    }
+
+    h2 {
+      margin-bottom: 20px;
+    }
+
+    .button-row {
+      margin-bottom: 20px;
+    }
+
+    button {
+      padding: 12px 24px;
+      font-size: 16px;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      margin-right: 10px;
+      transition: 0.3s;
+      background-color: #d0d7de;
+      color: black;
+    }
+
+    button:hover {
+      opacity: 0.9;
+    }
+
+    /* Styles for the different active modes */
+    .active-on {
+      background-color: green;
+      color: white;
+      transform: scale(1.05);
+    }
+
+    .active-off {
+      background-color: red;
+      color: white;
+      transform: scale(1.05);
+    }
+
+    .active-auto {
+      background-color: #007bff; /* Blue for AUTO */
+      color: white;
+      transform: scale(1.05);
+    }
+
+    .status-box {
+      margin-bottom: 20px;
+      padding: 12px;
+      background: white;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      width: fit-content;
+    }
+
+    canvas {
+      background: white;
+      border-radius: 10px;
+      padding: 10px;
+    }
+  </style>
+</head>
+<body>
+
+<h2>IoT Dashboard</h2>
+
+<div class="button-row">
+  <button id="btnOn" onclick="sendCmd('ON')">ON</button>
+  <button id="btnOff" onclick="sendCmd('OFF')">OFF</button>
+  <button id="btnAuto" onclick="sendCmd('AUTO')">AUTO</button>
+</div>
+
+<div class="status-box">
+  <strong>Current Command:</strong> <span id="currentCommand">None</span>
+</div>
+
+<canvas id="chart" width="1000" height="400"></canvas>
+
+<script>
+let myChart = null;
+
+// Fetches the latest 3 mode updates from the API
+async function load() {
+  try {
+    const response = await fetch('/api/status'); // Points to the updated Python API
+    const data = await response.json();
+
+    console.log("Data from API:", data);
+
+    // We use the 'history' array which contains the last 3 entries
+    const history = data.history || [];
+    
+    // Update the button state based on the very latest record
+    if (history.length > 0) {
+      setButtonState(history[0].mode); 
+    }
+
+    // Chart logic: Displaying sonar_cm for the last 3 entries
+    const values = history.map(x => Number(x.sonar_cm)).reverse();
+    const labels = history.map(x => x.server_time).reverse();
+
+    const ctx = document.getElementById('chart').getContext('2d');
+
+    if (myChart) {
+      myChart.destroy();
+    }
+
+    myChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Sonar (cm)',
+          data: values,
+          borderColor: '#007bff',
+          borderWidth: 2,
+          fill: false,
+          tension: 0.1
+        }]
+      },
+      options: {
+        responsive: false,
+        scales: {
+          y: { beginAtZero: true }
+        }
+      }
+    });
+  } catch (error) {
+    console.error("Error loading chart:", error);
+  }
+}
+
+function setButtonState(cmd) {
+  const btnOn = document.getElementById("btnOn");
+  const btnOff = document.getElementById("btnOff");
+  const btnAuto = document.getElementById("btnAuto");
+  const currentCommand = document.getElementById("currentCommand");
+
+  // Reset all button styles
+  btnOn.classList.remove("active-on");
+  btnOff.classList.remove("active-off");
+  btnAuto.classList.remove("active-auto");
+
+  currentCommand.textContent = cmd;
+
+  // Apply active style based on command
+  if (cmd === "ON") {
+    btnOn.classList.add("active-on");
+  } else if (cmd === "OFF") {
+    btnOff.classList.add("active-off");
+  } else if (cmd === "AUTO") {
+    btnAuto.classList.add("active-auto");
+  }
+}
+
+async function sendCmd(cmd) {
+  try {
+    await fetch('/send', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: 'cmd=' + encodeURIComponent(cmd)
+    });
+
+    setButtonState(cmd);
+    console.log("Command sent:", cmd);
+  } catch (error) {
+    console.error("Error sending command:", error);
+  }
+}
+
+// Initial load and refresh every 3 seconds
+load();
+setInterval(load, 3000);
+</script>
+
+</body>
+</html>

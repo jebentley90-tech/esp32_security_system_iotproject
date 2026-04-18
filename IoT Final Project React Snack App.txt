@@ -1,0 +1,342 @@
+//IoT Final Project React Snack App
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  SafeAreaView,
+  View,
+  Text,
+  Button,
+  StyleSheet,
+  ScrollView,
+} from 'react-native';
+import { Client, Message } from 'paho-mqtt';
+
+const ALLOWED_COMMANDS = ['ON','OFF','AUTO','STATUS'];
+
+const isValidStatusMessage = (data) => {
+  return (
+    data &&
+    typeof data === 'object' &&
+    typeof data.mode === 'string' &&
+    typeof data.presence === 'boolean' &&
+    typeof data.actuators === 'boolean' &&
+    typeof data.pir === 'boolean' &&
+    typeof data.sonar_presence === 'boolean'
+  );
+};
+
+export default function App() {
+  const clientRef = useRef(null);
+
+  const [status, setStatus] = useState('Not Connected');
+  const [lastReading, setLastReading] = useState(null);
+  const [lastTimestamp, setLastTimestamp] = useState('');
+  const [logs, setLogs] = useState([]);
+  const [system, setSystem] = useState(
+    'AUTO: Sensors Detecting, Actuators Ready'
+  );
+
+  const brokerHost = 'broker.emqx.io';
+  const brokerPort = 8084;
+  const brokerPath = '/mqtt';
+
+  const sensorTopic = 'joshandjoe/finalproject/esp32wroom1/system/status';
+  const ledTopic = 'joshandjoe/finalproject/esp32wroom1/system/cmd';
+
+  const clientId = 'expo-client-' + Math.random().toString(16).slice(2, 10);
+
+  const addLog = (text) => {
+    const now = new Date().toLocaleTimeString();
+    setLogs((prev) => [`[${now}] ${text}`, ...prev]);
+  };
+
+  const connectMQTT = () => {
+    try {
+      addLog('Creating MQTT client...');
+      const client = new Client(brokerHost, brokerPort, brokerPath, clientId);
+      clientRef.current = client;
+
+      client.onConnectionLost = (responseObject) => {
+        setStatus('Disconnected');
+        if (responseObject?.errorMessage) {
+          addLog('Connection lost: ' + responseObject.errorMessage);
+        } else {
+          addLog('Connection lost');
+        }
+      };
+
+      client.onMessageArrived = (msg) => {
+        addLog(`Message received on ${msg.destinationName}`);
+        addLog(`Payload: ${msg.payloadString}`);
+
+        if (msg.destinationName === sensorTopic) {
+          try {
+            const data = JSON.parse(msg.payloadString);
+            if(!isValidStatusMessage(data)) {
+              addLog('Rejected invalid status payload');
+              return;
+            }
+            setLastReading(data);
+            setLastTimestamp(new Date().toLocaleString());
+
+            if (data.mode === 'AUTO') {
+              setSystem('AUTO: Sensors Detecting, Actuators Ready');
+            } else if (data.mode === 'ON') {
+              setSystem('ON: Actuators Active');
+            } else if (data.mode === 'OFF') {
+              setSystem('OFF: Actuators Inactive');
+            }
+          } catch (err) {
+            addLog('JSON parse error: ' + String(err));
+          }
+        }
+      };
+
+      setStatus('Connecting...');
+      addLog('Connecting to broker...');
+
+      client.connect({
+        useSSL: true,
+        timeout: 10,
+        onSuccess: () => {
+          setStatus('Connected');
+          addLog('Connected successfully');
+
+          client.subscribe(sensorTopic, {
+            qos: 0,
+            onSuccess: () => addLog(`Subscribed to ${sensorTopic}`),
+            onFailure: (err) =>
+              addLog(`Subscribe failed: ${JSON.stringify(err)}`),
+          });
+        },
+        onFailure: (err) => {
+          setStatus('Connection failed');
+          addLog('Connect failed: ' + JSON.stringify(err));
+        },
+      });
+    } catch (error) {
+      setStatus('Error');
+      addLog('Connect error: ' + String(error));
+    }
+  };
+
+  const publishCommand = (command) => {
+    try {
+      const client = clientRef.current;
+
+      if (!client || !client.isConnected()) {
+        addLog('Cannot publish: not connected');
+        return;
+      }
+      if(!ALLOWED_COMMANDS.includes(command)) {
+        addLog(`Blocked invalid command: ${command}`);
+        return;
+      }
+      const message = JSON.stringify({
+        COMMAND: command,
+        TIMESTAMP: new Date().toISOString(),
+        SOURCE: 'REACT_SNACK_APP',
+      });
+
+      if(message.length > 200) {
+        addLog('Blocked publish: payload too large');
+      }
+
+      const msg = new Message(message);
+      msg.destinationName = ledTopic;
+      msg.qos = 0;
+      msg.retained = false;
+
+      client.send(msg);
+      addLog(`Published "${command}" to ${ledTopic}`);
+    } catch (error) {
+      addLog('Publish error: ' + String(error));
+    }
+  };
+
+  useEffect(() => {
+    connectMQTT();
+
+    return () => {
+      const client = clientRef.current;
+      if (client && client.isConnected()) {
+        try {
+          client.disconnect();
+        } catch (e) {}
+      }
+    };
+  }, []);
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <Text style={styles.title}>Joshua and Joseph's Final Project</Text>
+      <Text style={styles.subtitle}>Detection and Alarm System </Text>
+
+      <Text style={styles.label}>Connection Status:</Text>
+      <Text style={styles.value}>{status}</Text>
+
+      <View style={styles.spacer} />
+
+      <Text style={styles.label}>Latest Reading:</Text>
+      {lastReading ? (
+        <View style={styles.card}>
+          <Text style={styles.reading}>
+            Mode: {lastReading.mode ?? 'Unkown'}
+          </Text>
+          <Text style={styles.reading}>
+            Presence: {lastReading.presence ? 'Detected!!!' : 'Not Detected'}
+          </Text>
+          <Text style={styles.time}>Received at: {lastTimestamp}</Text>
+        </View>
+      ) : (
+        <Text style={styles.value}>No reading received yet</Text>
+      )}
+
+      <View style={styles.spacer} />
+
+      <Text style={styles.label}>Set Mode:</Text>
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonWrapAuto}>
+          <Button
+            title="AUTO"
+            color="#EED"
+            onPress={() => publishCommand('AUTO')}
+          />
+        </View>
+        <View style={styles.buttonWrapOn}>
+          <Button
+            title="ON"
+            color="#EED"
+            onPress={() => publishCommand('ON')}
+          />
+        </View>
+        <View style={styles.buttonWrapOff}>
+          <Button
+            title="OFF"
+            color="#EED"
+            onPress={() => publishCommand('OFF')}
+          />
+        </View>
+      </View>
+
+      <Text style={styles.label}>System Status:</Text>
+      <Text style={styles.small}>{system}</Text>
+
+      <View style={styles.spacer} />
+
+      <Text style={styles.label}>Topics:</Text>
+      <Text style={styles.small}>Sensor: {sensorTopic}</Text>
+      <Text style={styles.small}>Command: {ledTopic}</Text>
+
+      <View style={styles.spacer} />
+
+      <Text style={styles.label}>Debug Log</Text>
+      <ScrollView style={styles.logBox}>
+        {logs.map((log, index) => (
+          <Text key={index} style={styles.logText}>
+            {log}
+          </Text>
+        ))}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    padding: 20,
+    backgroundColor: '#eefefe',
+  },
+  title: {
+    marginTop: 12,
+    fontSize: 22,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
+  subtitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 16,
+  },
+  label: {
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 0,
+  },
+  value: {
+    fontSize: 15,
+  },
+  card: {
+    borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 10,
+    padding: 12,
+  },
+  reading: {
+    fontSize: 14,
+    marginBottom: 2,
+  },
+  time: {
+    fontSize: 13,
+  },
+  small: {
+    fontSize: 13,
+    marginBottom: 3,
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  buttonWrapAuto: {
+    backgroundColor: '#3B82F6',
+    borderWidth: 1,
+    borderColor: '#222',
+    borderRadius: 3,
+    padding: 10,
+    flexDirection: 'row',
+    gap: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+  },
+  buttonWrapOn: {
+    backgroundColor: '#22C55E',
+    borderWidth: 1,
+    borderColor: '#222',
+    borderRadius: 3,
+    padding: 10,
+    flexDirection: 'row',
+    gap: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+  },
+  buttonWrapOff: {
+    backgroundColor: '#EF4444',
+    borderWidth: 1,
+    borderColor: '#222',
+    borderRadius: 3,
+    padding: 10,
+    flexDirection: 'row',
+    gap: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+  },
+  logBox: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 8,
+  },
+  logText: {
+    fontSize: 12,
+    marginBottom: 6,
+  },
+  spacer: {
+    height: 8,
+    marginBottom: 8,
+  },
+});
